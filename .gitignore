@@ -1,0 +1,13 @@
+.gitignore~
+.DS_store
+.vscode
+__pycache__
+catboost_info
+notebooks
+results
+params/**
+data/**
+result
+!data/.gitkeep
+.ipynb_checkpoints
+.spyproject/
