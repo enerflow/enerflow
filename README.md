@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 ## How to use
 
-Find use case examples in [examples](https://github.com/enerflow/enerflow/examples) folder
+Find use case examples in [examples](https://github.com/enerflow/enerflow/tree/main/examples) folder
 
 
 
