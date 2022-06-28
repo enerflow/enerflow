@@ -1,14 +1,14 @@
 import json
 import pandas as pd
-from enerflow_forecast import forecast
+from enerflow import forecast
 
 
 # Import data
-data = pd.read_csv('./examples/heat-demand-forecasting/data.csv', header=0, index_col=0, parse_dates=True)
+data = pd.read_csv('data.csv', header=0, index_col=0, parse_dates=True)
 
 
 # Import parameters
-params_path = './examples/heat-demand-forecasting/parameters.json'
+params_path = 'parameters.json'
 with open(params_path, 'r', encoding='utf-8') as file:
     params = json.loads(file.read())
     

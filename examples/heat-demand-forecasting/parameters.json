@@ -1,7 +1,7 @@
 {
   "trial_name": "trial_1",
   "trial_comment": "",
-  "path_result": "./examples/heat-demand-forecasting/result/",
+  "path_result": "result/",
   "path_preprocessed_data": "",
   "filename_preprocessed_data": "",
   "datetime_splits":

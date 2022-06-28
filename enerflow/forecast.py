@@ -296,14 +296,16 @@ class Trial(object):
                                       importance_type='gain',
                                       **self.model_params[model_name].get('kwargs', {}))         
 
+            callbacks = []
+            callbacks.append(lgb.log_evaluation(0))
+            if early_stopping is not None:
+                callbacks.append(lgb.early_stopping(stopping_rounds=early_stopping))
             model.fit(df_model_train[self.all_features],
                       df_model_train[[self.target]],
                       sample_weight=weight,
                       eval_set=eval_set,
-                      early_stopping_rounds=early_stopping,
-                      verbose=False,
                       categorical_feature=self.categorical_features,
-                      callbacks=None)
+                      callbacks=callbacks)
 
             # Remove eval_key_name level from dictionary
             evals_result = {key: value[eval_key_name] for key, value in model.evals_result_.items()}   
@@ -396,6 +398,7 @@ class Trial(object):
                 train_set = lgb.Dataset(df_model_train[self.all_features], 
                                         label=df_model_train[self.target], 
                                         weight=weight, 
+                                        categorical_feature=self.categorical_features,
                                         params={'verbose': -1}, 
                                         free_raw_data=False)
                 model_p = self.model_params[model_name].copy()
@@ -413,7 +416,7 @@ class Trial(object):
                                    stratified=self.early_stopping_by_cv.get("stratified", False),
                                    metrics=[eval_key_name],
                                    verbose_eval=-1, 
-                                   early_stopping_rounds=self.early_stopping_by_cv.get("early_stopping", 30)
+                                   callbacks=[lgb.early_stopping(stopping_rounds=self.early_stopping_by_cv.get("early_stopping", 30))]
                                    )                
                 num_rounds = np.argmin(cv_metrics[f'{eval_key_name}-mean'])
                 early_stopping = None

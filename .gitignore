@@ -1,6 +1,8 @@
 .gitignore~
 .DS_store
 .vscode
+.eggs
+*.egg-info
 __pycache__
 catboost_info
 notebooks
