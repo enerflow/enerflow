@@ -134,19 +134,24 @@ class Trial(object):
         # Build up splits dependent on input 
 
         if hasattr(self, 'datetime_splits'):
-            self.splits = self.params_json['datetime_splits']
+            self.splits = self.datetime_splits
         elif hasattr(self, 'valid_fraction'):
-            index = df.groupby('valid_datetime').first().index
-            n_index = len(index)
-            self.splits = {'train': [[[index[0], index[int((1-self.valid_fraction)*n_index)]]]],
-                           'valid': [[[index[int((1-self.valid_fraction)*n_index)+1], index[-1]]]]}
+            index = df.groupby('valid_datetime').first().index.sort_values().strftime("%Y-%m-%d %H:%M")
+            if self.valid_fraction == 1.0:
+                self.splits = {'valid': [[[index[0], index[-1]]]]}
+            else:
+                n_index = len(index)
+                self.splits = {'train': [[[index[0], index[int((1-self.valid_fraction)*n_index)]]]],
+                               'valid': [[[index[int((1-self.valid_fraction)*n_index)+1], index[-1]]]]}
+        else:
+            raise ValueError("Could not determine the splits based on datetime_splits or valid_fraction parameters")
         
         self.params_json['splits'] = self.splits
         
         return self.splits
 
 
-    def generate_dataset(self, df, split=None): 
+    def generate_dataset(self, df, split=None, generate_target=True): 
 
         def add_lags(df, feature_lags): 
             # Lagged features
@@ -171,7 +176,10 @@ class Trial(object):
         if split:
             df = pd.concat([df.loc[pd.IndexSlice[:, s[0]:s[1]], :] for s in split], axis=0).drop_duplicates(keep='first')
         df_X = df.loc[:, self.features]
-        df_y = df.loc[:, [self.target]]
+        if generate_target:
+            df_y = df.loc[:, [self.target]]
+        else:
+            df_y = None
 
         # Add lagged variables
         if self.feature_lags is not None: 
@@ -180,9 +188,13 @@ class Trial(object):
         else:
             self.all_features = self.features
 
-        # Remove samples where either all features are nan or target is nan
-        is_nan = df_X.isna().all(axis=1) | df_y.isna().all(axis=1)
-        df_model = pd.concat([df_X, df_y], axis=1)[~is_nan]
+        is_nan = df_X.isna().all(axis=1) 
+        if generate_target:
+            # Remove samples where either all features are nan or target is nan
+            is_nan |= df_y.isna().all(axis=1)
+            df_model = pd.concat([df_X, df_y], axis=1)[~is_nan]
+        else:
+            df_model = df_X[~is_nan]
 
         # Keep all timestamps for which zenith <= prescribed value (day timestamps)
         if self.train_only_zenith_angle_below:
@@ -193,8 +205,9 @@ class Trial(object):
         if self.diff_target_with_physical:
             df_model[self.target] = df_model[self.target]-df_model[self.diff_target_with_physical]
 
-        # Use mean window to smooth target
-        df_model[self.target] = df_model[self.target].rolling(self.target_smoothing_window, win_type='boxcar', center=True, min_periods=0).mean()
+        if generate_target:
+            # Use mean window to smooth target
+            df_model[self.target] = df_model[self.target].rolling(self.target_smoothing_window, win_type='boxcar', center=True, min_periods=0).mean()
 
         # Apply time-based sample weighting
         if self.time_weight_params:
@@ -207,7 +220,7 @@ class Trial(object):
             time_weight = np.ones(df.shape[0])
 
         # Apply target level-based sample weighting
-        if self.target_level_weight_params:
+        if self.target_level_weight_params and generate_target:
             weight_end = self.target_level_weight_params['weight_end']
             weight_shape = self.target_level_weight_params['weight_shape']
             target = df_model[self.target]
@@ -231,7 +244,7 @@ class Trial(object):
         return df_X, df_y, df_model, weight
 
 
-    def generate_dataset_split_site(self, df, split_set='train'):
+    def generate_dataset_split_site(self, df, split_set='train', generate_target=True):
         # Generate train and valid splits
 
         print('Generating dataset...')
@@ -242,7 +255,7 @@ class Trial(object):
                 dfs_X_site, dfs_y_site, dfs_model_site, weight_site = [], [], [], []
                 for site in self.sites:
 
-                    df_X, df_y, df_model, weight = self.generate_dataset(df[site], split)
+                    df_X, df_y, df_model, weight = self.generate_dataset(df[site], split, generate_target=generate_target)
 
                     dfs_X_site.append(df_X)
                     dfs_y_site.append(df_y)
@@ -418,7 +431,7 @@ class Trial(object):
                                    verbose_eval=-1, 
                                    callbacks=[lgb.early_stopping(stopping_rounds=self.early_stopping_by_cv.get("early_stopping", 30))]
                                    )                
-                num_rounds = np.argmin(cv_metrics[f'{eval_key_name}-mean'])
+                num_rounds = np.argmin(cv_metrics[f'{eval_key_name}-mean'])+1
                 early_stopping = None
             else:
                 raise NotImplementedError()
@@ -512,16 +525,17 @@ class Trial(object):
         return models_split_site, dfs_evals_result_site_split
     
 
-    def load_models(self, path=None):
+    def load_models(self, path=None, split_indices="train"):
         sites = range(len(self.sites))
-        splits = range(len(self.datetime_splits['train']))
+        if isinstance(split_indices, str):
+            split_indices = list(range(len(self.datetime_splits[split_indices])))
         model_path = path if path else self.trial_path+'/models/'
         model_files = glob.glob(model_path+'*.txt')
         model_names = list(set([file.split('models_')[1].split('_q_quantile')[0] for file in model_files]))
 
         models_split_site = []
-        with tqdm(total=len(splits)*len(sites)*len(model_names)) as pbar:
-            for split in splits:    
+        with tqdm(total=len(split_indices)*len(sites)*len(model_names)) as pbar:
+            for split in split_indices:    
                 models_site = []
                 for site in sites:
                     model_q = {}
@@ -908,6 +922,19 @@ class Trial(object):
         return score_train_model, score_valid_model
 
 
+    def run_pipeline_predict(self, df):
+        print('Running predict pipeline for trial: {0}...'.format(self.trial_name))
+        print('Number of workers: {0}.'.format(self.parallel_processing['n_workers']))
+
+        if hasattr(self, 'datetime_splits'):
+            del self.datetime_splits
+        self.valid_fraction = 1.0
+        self.splits = self.generate_splits(df)
+        dfs_X_valid_split_site, dfs_y_valid_split_site, dfs_model_valid_split_site, _ = self.generate_dataset_split_site(df, split_set='valid', generate_target=False)
+        models_split_site = self.load_models(split_indices=[0])
+        dfs_y_pred_valid_split_site = self.predict_split_site(dfs_X_valid_split_site, models_split_site)
+        
+        return dfs_y_pred_valid_split_site
 
 # Helper functions
 def natural_sort(l):
@@ -927,3 +954,9 @@ if __name__ == '__main__':
     trial = Trial(params_json)
     df = trial.load_data()
     trial.run_pipeline(df)
+
+    df_y_pred = run_pipeline_predict(df.iloc[-100:])
+    print(df_y_pred)
+
+
+
