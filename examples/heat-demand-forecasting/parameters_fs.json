@@ -1,0 +1,60 @@
+{
+  "trial_name": "trial_fs",
+  "trial_comment": "",
+  "path_result": "result/",
+  "path_preprocessed_data": "",
+  "filename_preprocessed_data": "",
+  "datetime_splits":
+    {"train": [[["2015-01-01 00:00:00", "2017-12-31 23:00:00"],["2019-01-01 00:00:00", "2019-12-31 23:00:00"]]],
+     "valid": [[["2018-01-01 00:00:00", "2018-12-31 23:00:00"],["2020-01-01 00:00:00", "2020-12-31 23:00:00"]]]},
+  "sites": ["1"],
+  "features": ["Temperature", "Temperature^2","year","month","hour"],
+  "feature_lags": {
+     "Temperature": [1, 2, 3, -1, -2, -3],
+     "Temperature^2": [1, 2, 3, -1, -2, -3]},
+  "categorical_features": ["year","month","hour"],
+  "target": "Heat Demand",
+  "diff_target_with_physical": false,
+  "target_smoothing_window": 1,
+  "feature_selection": {
+     "criterion": "squared_error",
+     "n_features_to_select": "auto",
+     "tol": 0.000001,
+     "direction": "forward",
+     "cv": null,
+     "n_jobs": null
+  },  
+  "early_stopping_by_cv": {
+     "enabled": true,
+     "nfold": 3,
+     "max_num_rounds": 500,
+     "early_stopping": 30
+  },
+  "regression_params": {
+     "type": ["quantile"],
+     "alpha_range": [0.1, 1.0, 0.1], 
+     "quantile_postprocess": "sorting",
+     "target_min_max": [null, null]},
+  "model_params":
+    {"lightgbm":
+      {"boosting_type": "gbdt",
+      "num_trees": 500,
+      "learning_rate": 0.1,
+      "max_depth": 8,
+      "min_data_in_leaf": 20,
+      "max_leaves": 32,
+      "bagging_fraction": 1,
+      "bagging_freq": 0,
+      "feature_fraction": 1,
+      "lambda_l1": 0.0,
+      "lambda_l2": 0.0,
+      "kwargs": {"max_bin": 30, "n_jobs": 1}}
+      },
+  "save_options":
+     {"data": true,
+      "prediction": true,
+      "model": true,
+      "evals": true,
+      "loss": true,
+      "overall_score": true}
+}
