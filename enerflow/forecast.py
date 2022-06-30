@@ -13,6 +13,10 @@ import lightgbm as lgb
 import xgboost as xgb
 import catboost as cb
 
+from sklearn.feature_selection import SequentialFeatureSelector
+from sklearn.tree import DecisionTreeRegressor
+from itertools import compress
+
 #import sklearn as skl
 #import statsmodels.api as sm
 
@@ -47,6 +51,7 @@ class Trial(object):
         self.regression_params = params_json['regression_params']
         self.save_options = params_json['save_options']
         self.early_stopping_by_cv = params_json.get('early_stopping_by_cv', False)
+        self.feature_selection = params_json.get('feature_selection', False)
         
         if 'parallel_processing' in params_json:
             self.parallel_processing = params_json['parallel_processing']
@@ -110,6 +115,11 @@ class Trial(object):
         
         if 'splits' in params_json:
             self.splits = params_json['splits']
+            
+        if 'selected_features' in params_json:
+            self.selected_features = params_json['selected_features']
+        else:
+            self.selected_features = None
 
         # Runtime
         self.parallel_backend = params_json.get("parallel_backend", "threading")
@@ -179,6 +189,9 @@ class Trial(object):
             self.all_features = self.features+lagged_features
         else:
             self.all_features = self.features
+        
+        if self.selected_features == None:
+            self.selected_features = self.all_features
 
         # Remove samples where either all features are nan or target is nan
         is_nan = df_X.isna().all(axis=1) | df_y.isna().all(axis=1)
@@ -263,11 +276,11 @@ class Trial(object):
         # Create and fit model. This method could potentially be split up in create and fit seperately. 
         
         if df_model_valid is not None:
-            eval_set =[(df_model_valid[self.all_features], df_model_valid[[self.target]])]
-#            eval_set =[(df_model_train[self.all_features], df_model_train[[self.target]]), (df_model_valid[self.all_features], df_model_valid[[self.target]])]
+            eval_set =[(df_model_valid[self.selected_features], df_model_valid[[self.target]])]
+            #eval_set =[(df_model_train[self.selected_features], df_model_train[[self.target]]), (df_model_valid[self.selected_features], df_model_valid[[self.target]])]
         else:
             eval_set = []            
-            #eval_set =[(df_model_train[self.all_features], df_model_train[[self.target]])]
+            #eval_set =[(df_model_train[self.selected_features], df_model_train[[self.target]])]
 
         if model_name.split('_')[0] == 'lightgbm':
             if objective == 'mean': 
@@ -300,7 +313,7 @@ class Trial(object):
             callbacks.append(lgb.log_evaluation(0))
             if early_stopping is not None:
                 callbacks.append(lgb.early_stopping(stopping_rounds=early_stopping))
-            model.fit(df_model_train[self.all_features],
+            model.fit(df_model_train[self.selected_features],
                       df_model_train[[self.target]],
                       sample_weight=weight,
                       eval_set=eval_set,
@@ -332,7 +345,7 @@ class Trial(object):
                                          importance_type='gain', 
                                          **self.model_params[model_name]['kwargs'])
 
-            model.fit(df_model_train[self.all_features],
+            model.fit(df_model_train[self.selected_features],
                       df_model_train[[self.target]],
                       sample_weight=weight,
                       eval_set=eval_set,
@@ -367,7 +380,7 @@ class Trial(object):
                                           random_state=self.random_seed,
                                           **self.model_params[model_name]['kwargs']) 
 
-            model.fit(df_model_train[self.all_features],
+            model.fit(df_model_train[self.selected_features],
                       df_model_train[[self.target]],
                       sample_weight=weight,
                       eval_set=eval_set, # Catboost already uses train set in eval_set. Therefore, should not be passed here. 
@@ -383,6 +396,38 @@ class Trial(object):
         return model, evals_result
 
 
+    def select_features(self, df_model_train):
+        
+        if self.feature_selection:
+        
+            print('')
+            print('Selecting features ...')
+            
+            # Feature selection parameters
+            criterion = self.feature_selection.get("criterion", "squared_error")
+            n_features_to_select=self.feature_selection.get("n_features_to_select", "auto")
+            tol=self.feature_selection.get("tol", 0.000001)
+            direction=self.feature_selection.get("direction", "forward")
+            scoring=self.feature_selection.get("scoring", None)
+            cv=self.feature_selection.get("cv", None)
+            n_jobs=self.feature_selection.get("n_jobs", None)
+    
+            regressor = DecisionTreeRegressor(criterion=criterion)
+            sfs = SequentialFeatureSelector(    
+                estimator = regressor, n_features_to_select=n_features_to_select, tol=tol, direction=direction, scoring=scoring, cv=cv, n_jobs=n_jobs,
+            ).fit(df_model_train.dropna()[self.all_features], df_model_train.dropna()[[self.target]])
+            
+            self.selected_features = list(compress(self.all_features, sfs.get_support()))
+            # Save selected features to json file
+            self.params_json['selected_features'] = self.selected_features
+            
+            #TODO Keep provided categorical features
+            self.categorical_features = 'auto'
+            self.params_json['categorical_features'] = self.categorical_features
+        else:
+            self.selected_features = self.all_features
+
+
     def determine_num_rounds(self, df_model_train, model_name, objective='mean', weight=None):
         if self.early_stopping_by_cv.get("enabled", None) == True:
             if model_name.split('_')[0] == 'lightgbm':
@@ -395,7 +440,7 @@ class Trial(object):
                 else: 
                     raise ValueError("'objective' for lightgbm must be either 'mean' or 'quantile'")
                                     
-                train_set = lgb.Dataset(df_model_train[self.all_features], 
+                train_set = lgb.Dataset(df_model_train[self.selected_features], 
                                         label=df_model_train[self.target], 
                                         weight=weight, 
                                         categorical_feature=self.categorical_features,
@@ -431,6 +476,8 @@ class Trial(object):
 
 
     def train(self, df_model_train, model_name, df_model_valid=None, weight=None): 
+        
+        self.select_features(df_model_train)
         
         model_q, evals_result_q = {}, {}
         if 'mean' in self.regression_params['type']:
@@ -618,6 +665,7 @@ class Trial(object):
             return df_y_pred_q
 
         df_X = preprocess(df_X)
+        df_X = df_X[self.selected_features]
 
         # Run prediction loop over all quantiles
         y_pred_q, X_shap_q, y_pred_post_process_q = [], [], []

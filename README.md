@@ -14,7 +14,7 @@
 Clone and install the necessary libraries using:
 
 ```
-git clone git@github.com:enerflow/enerflow.git
+git clone https://github.com/enerflow/enerflow.git
 pip install -r requirements.txt
 ```
 
