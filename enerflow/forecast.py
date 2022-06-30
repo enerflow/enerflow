@@ -71,10 +71,15 @@ class Trial(object):
             self.random_seed = params_json['random_seed']
         else:
             self.random_seed = None
-        if 'categorical_features' in params_json:
+        if 'categorical_features' in params_json:            
             self.categorical_features = params_json['categorical_features']
         else: 
             self.categorical_features = 'auto'
+        if self.feature_selection and self.categorical_features != "auto":
+             #TODO Keep provided categorical features
+            self.categorical_features = 'auto'                    
+            print("WARNING: Setting categorical_features to auto when feature_selection is used")
+
         if 'feature_lags' in params_json:
             self.feature_lags = params_json['feature_lags']
         else: 
@@ -198,9 +203,6 @@ class Trial(object):
         else:
             self.all_features = self.features
         
-        if self.selected_features == None:
-            self.selected_features = self.all_features
-
         is_nan = df_X.isna().all(axis=1) 
         if generate_target:
             # Remove samples where either all features are nan or target is nan
@@ -285,15 +287,15 @@ class Trial(object):
         return dfs_X_split_site, dfs_y_split_site, dfs_model_split_site, weight_split_site
 
 
-    def create_fit_model(self, model_name, df_model_train, objective='mean', alpha=None, df_model_valid=None, weight=None, num_rounds=None, early_stopping=None):
+    def create_fit_model(self, model_name, df_model_train, selected_features, objective='mean', alpha=None, df_model_valid=None, weight=None, num_rounds=None, early_stopping=None):
         # Create and fit model. This method could potentially be split up in create and fit seperately. 
         
         if df_model_valid is not None:
-            eval_set =[(df_model_valid[self.selected_features], df_model_valid[[self.target]])]
-            #eval_set =[(df_model_train[self.selected_features], df_model_train[[self.target]]), (df_model_valid[self.selected_features], df_model_valid[[self.target]])]
+            eval_set =[(df_model_valid[selected_features], df_model_valid[[self.target]])]
+            #eval_set =[(df_model_train[selected_features], df_model_train[[self.target]]), (df_model_valid[self.selected_features], df_model_valid[[self.target]])]
         else:
             eval_set = []            
-            #eval_set =[(df_model_train[self.selected_features], df_model_train[[self.target]])]
+            #eval_set =[(df_model_train[selected_features], df_model_train[[self.target]])]
 
         if model_name.split('_')[0] == 'lightgbm':
             if objective == 'mean': 
@@ -326,7 +328,7 @@ class Trial(object):
             callbacks.append(lgb.log_evaluation(0))
             if early_stopping is not None:
                 callbacks.append(lgb.early_stopping(stopping_rounds=early_stopping))
-            model.fit(df_model_train[self.selected_features],
+            model.fit(df_model_train[selected_features],
                       df_model_train[[self.target]],
                       sample_weight=weight,
                       eval_set=eval_set,
@@ -358,7 +360,7 @@ class Trial(object):
                                          importance_type='gain', 
                                          **self.model_params[model_name]['kwargs'])
 
-            model.fit(df_model_train[self.selected_features],
+            model.fit(df_model_train[selected_features],
                       df_model_train[[self.target]],
                       sample_weight=weight,
                       eval_set=eval_set,
@@ -393,7 +395,7 @@ class Trial(object):
                                           random_state=self.random_seed,
                                           **self.model_params[model_name]['kwargs']) 
 
-            model.fit(df_model_train[self.selected_features],
+            model.fit(df_model_train[selected_features],
                       df_model_train[[self.target]],
                       sample_weight=weight,
                       eval_set=eval_set, # Catboost already uses train set in eval_set. Therefore, should not be passed here. 
@@ -409,7 +411,7 @@ class Trial(object):
         return model, evals_result
 
 
-    def select_features(self, df_model_train):
+    def select_features(self, df_model_train, idx_split=None, idx_site=None, model_name=None):
         
         if self.feature_selection:
         
@@ -430,18 +432,22 @@ class Trial(object):
                 estimator = regressor, n_features_to_select=n_features_to_select, tol=tol, direction=direction, scoring=scoring, cv=cv, n_jobs=n_jobs,
             ).fit(df_model_train.dropna()[self.all_features], df_model_train.dropna()[[self.target]])
             
-            self.selected_features = list(compress(self.all_features, sfs.get_support()))
+            current_selected_features = list(compress(self.all_features, sfs.get_support()))
+
+            if self.selected_features is None:
+                self.selected_features = {}
+
+            key = self.get_sf_key(idx_split, idx_site, model_name)            
+            self.selected_features[key] = current_selected_features
+
             # Save selected features to json file
-            self.params_json['selected_features'] = self.selected_features
-            
-            #TODO Keep provided categorical features
-            self.categorical_features = 'auto'
-            self.params_json['categorical_features'] = self.categorical_features
+            self.params_json['selected_features'] = self.selected_features                    
+            return current_selected_features
         else:
-            self.selected_features = self.all_features
+            return self.all_features
 
 
-    def determine_num_rounds(self, df_model_train, model_name, objective='mean', weight=None):
+    def determine_num_rounds(self, df_model_train, model_name, selected_features, objective='mean', weight=None):
         if self.early_stopping_by_cv.get("enabled", None) == True:
             if model_name.split('_')[0] == 'lightgbm':
                 if objective == 'mean': 
@@ -453,7 +459,7 @@ class Trial(object):
                 else: 
                     raise ValueError("'objective' for lightgbm must be either 'mean' or 'quantile'")
                                     
-                train_set = lgb.Dataset(df_model_train[self.selected_features], 
+                train_set = lgb.Dataset(df_model_train[selected_features], 
                                         label=df_model_train[self.target], 
                                         weight=weight, 
                                         categorical_feature=self.categorical_features,
@@ -488,13 +494,13 @@ class Trial(object):
 
 
 
-    def train(self, df_model_train, model_name, df_model_valid=None, weight=None): 
+    def train(self, df_model_train, model_name, idx_split=None, idx_site=None, df_model_valid=None, weight=None): 
         
-        self.select_features(df_model_train)
+        current_selected_features = self.select_features(df_model_train, idx_split=idx_split, idx_site=idx_site, model_name=model_name)
         
         model_q, evals_result_q = {}, {}
         if 'mean' in self.regression_params['type']:
-            num_rounds, early_stopping = self.determine_num_rounds(df_model_train, model_name, objective='mean', weight=weight)
+            num_rounds, early_stopping = self.determine_num_rounds(df_model_train, model_name, current_selected_features, objective='mean', weight=weight)
             # Train model for mean
             model, evals_result = self.create_fit_model(model_name, df_model_train, 
                                             objective='mean', df_model_valid=df_model_valid, 
@@ -504,13 +510,14 @@ class Trial(object):
             evals_result_q['mean'] = evals_result
 
         if 'quantile' in self.regression_params['type']:
-            num_rounds, early_stopping = self.determine_num_rounds(df_model_train, model_name, objective='quantile', weight=weight)
+            num_rounds, early_stopping = self.determine_num_rounds(df_model_train, model_name, current_selected_features, objective='quantile', weight=weight)
             
             # Train models for different quantiles
             with joblib.parallel_backend(self.parallel_processing['backend']):
                 results = joblib.Parallel(n_jobs=self.parallel_processing['n_workers'])(
                             joblib.delayed(self.create_fit_model)(model_name, 
                                                                   df_model_train,
+                                                                  current_selected_features,
                                                                   objective='quantile',
                                                                   alpha=alpha,
                                                                   df_model_valid=df_model_valid, 
@@ -557,7 +564,7 @@ class Trial(object):
                         else:
                             weight = None
                         
-                        model_q, df_evals_result_q = self.train(df_model_train, model_name, df_model_valid=df_model_valid, weight=weight)
+                        model_q, df_evals_result_q = self.train(df_model_train, model_name, idx_split=idx_split, idx_site=idx_site, df_model_valid=df_model_valid, weight=weight)
 
                         models[model_name] = model_q
                         dfs_evals_result[model_name] = df_evals_result_q
@@ -610,7 +617,7 @@ class Trial(object):
         return models_split_site
 
 
-    def predict(self, df_X, model_q, model_name, return_shap=False): 
+    def predict(self, df_X, model_q, model_name, selected_features, return_shap=False): 
         # Use trained models to predict multiple quantiles and postprocess the predictions.
 
         def preprocess(df_X):
@@ -679,7 +686,8 @@ class Trial(object):
             return df_y_pred_q
 
         df_X = preprocess(df_X)
-        df_X = df_X[self.selected_features]
+        if selected_features is not None:
+            df_X = df_X[selected_features]
 
         # Run prediction loop over all quantiles
         y_pred_q, X_shap_q, y_pred_post_process_q = [], [], []
@@ -708,6 +716,16 @@ class Trial(object):
             return df_y_pred_q, y_pred_q, y_pred_post_process_q
 
 
+    def get_sf_key(self, idx_split, idx_site, model_name):
+        return str((idx_split, idx_site, model_name))
+
+    def get_selected_features(self, idx_split, idx_site, model_name):
+        if self.selected_features is not None:
+            key = self.get_sf_key(idx_split, idx_site, model_name)
+            return self.selected_features[key]
+        else:
+            return None
+
     def predict_split_site(self, dfs_X_split_site, model_split_site):
         # Use trained models to predict for their corresponding split
         #TODO reformat so that model name is dict inside the lists. 
@@ -716,12 +734,13 @@ class Trial(object):
         time.sleep(0.2)
         dfs_y_pred_split_site = []
         with tqdm(total=len(dfs_X_split_site[0])*len(dfs_X_split_site)*len(self.model_params.keys())) as pbar:
-            for dfs_X_site, model_site in zip(dfs_X_split_site, model_split_site):
+            for idx_split, (dfs_X_site, model_site) in enumerate(zip(dfs_X_split_site, model_split_site)):
                 dfs_y_pred_site = []
-                for dfs_X, model_q, in zip(dfs_X_site, model_site):
+                for idx_site, (dfs_X, model_q) in enumerate(zip(dfs_X_site, model_site)):
                     dfs_y_pred_models = {}
                     for model_name in self.model_params.keys(): 
-                        df_y_pred_q, _, _ = self.predict(dfs_X, model_q[model_name], model_name)
+                        selected_features = self.get_selected_features(idx_split, idx_site, model_name)
+                        df_y_pred_q, _, _ = self.predict(dfs_X, model_q[model_name], model_name, selected_features)
                         dfs_y_pred_models[model_name] = df_y_pred_q
                         pbar.update(1)
 
@@ -978,8 +997,8 @@ class Trial(object):
             del self.datetime_splits
         self.valid_fraction = 1.0
         self.splits = self.generate_splits(df)
-        dfs_X_valid_split_site, dfs_y_valid_split_site, dfs_model_valid_split_site, _ = self.generate_dataset_split_site(df, split_set='valid', generate_target=False)
         models_split_site = self.load_models(split_indices=[0])
+        dfs_X_valid_split_site, dfs_y_valid_split_site, dfs_model_valid_split_site, _ = self.generate_dataset_split_site(df, split_set='valid', generate_target=False)        
         dfs_y_pred_valid_split_site = self.predict_split_site(dfs_X_valid_split_site, models_split_site)
         
         return dfs_y_pred_valid_split_site
