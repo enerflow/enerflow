@@ -64,6 +64,7 @@ def plot_scatters(df_y_pred_train, df_y_train, df_y_pred_valid=None, df_y_valid=
         fig, axes = plt.subplots(figsize=(15,len(columns)))
     else: 
         fig, axes = plt.subplots(nrows=int(np.ceil(len(columns)/3)), ncols=3, sharex=True, sharey=True, figsize=(15,len(columns)))
+    axes = np.array(axes)
     axes = axes.flatten()
     for column, ax in zip(columns,axes): 
         ax.scatter(df_y_pred_train[column], df_y_train[column], alpha=0.1)
