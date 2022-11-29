@@ -502,9 +502,14 @@ class Trial(object):
         if 'mean' in self.regression_params['type']:
             num_rounds, early_stopping = self.determine_num_rounds(df_model_train, model_name, current_selected_features, objective='mean', weight=weight)
             # Train model for mean
-            model, evals_result = self.create_fit_model(model_name, df_model_train, 
-                                            objective='mean', df_model_valid=df_model_valid, 
-                                            weight=weight, num_rounds=num_rounds, early_stopping=early_stopping)
+            model, evals_result = self.create_fit_model(model_name, 
+                                            df_model_train,
+                                            current_selected_features,
+                                            objective='mean', 
+                                            df_model_valid=df_model_valid, 
+                                            weight=weight, 
+                                            num_rounds=num_rounds, 
+                                            early_stopping=early_stopping)
 
             model_q['mean'] = model
             evals_result_q['mean'] = evals_result
